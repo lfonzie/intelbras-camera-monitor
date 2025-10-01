@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useSession, signOut } from 'next-auth/react';
+import Link from 'next/link';
 import Camera from '@/components/Camera';
 import axios from 'axios';
 
@@ -29,21 +30,46 @@ export default function CameraGrid() {
         setLoading(true);
         setError('');
         
-        const promises = cameras.map(async (id) => {
-          try {
-            const response = await axios.get(`/api/streams/${id}`);
-            return { id, url: response.data.url };
-          } catch (error) {
-            console.error(`Erro ao carregar stream da câmera ${id}:`, error);
+        // Carregar streams em lotes para evitar sobrecarga
+        const batchSize = 5;
+        const streamMap: Record<number, string> = {};
+        
+        for (let i = 0; i < cameras.length; i += batchSize) {
+          const batch = cameras.slice(i, i + batchSize);
+          
+          const promises = batch.map(async (id) => {
+            // Retry até 3 vezes para cada câmera
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              try {
+                const response = await axios.get(`/api/streams/${id}`, {
+                  timeout: 5000, // 5 segundos de timeout
+                  headers: {
+                    'Cache-Control': 'no-cache'
+                  }
+                });
+                return { id, url: response.data.url };
+              } catch (error) {
+                if (attempt === 3) {
+                  console.error(`Erro ao carregar stream da câmera ${id} após 3 tentativas:`, error);
+                  return { id, url: '' };
+                }
+                // Aguardar antes da próxima tentativa
+                await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+              }
+            }
             return { id, url: '' };
-          }
-        });
+          });
 
-        const results = await Promise.all(promises);
-        const streamMap = results.reduce((acc, { id, url }) => {
-          acc[id] = url;
-          return acc;
-        }, {} as Record<number, string>);
+          const results = await Promise.all(promises);
+          results.forEach(({ id, url }) => {
+            streamMap[id] = url;
+          });
+          
+          // Pequena pausa entre lotes para evitar sobrecarga
+          if (i + batchSize < cameras.length) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
 
         setStreams(streamMap);
       } catch (error) {
@@ -55,7 +81,7 @@ export default function CameraGrid() {
     };
 
     fetchStreams();
-  }, [session, status, cameras]);
+  }, [session, status]);
 
   const handleRecord = (cameraId: number) => {
     setRecordingCameras(prev => new Set(prev).add(cameraId));
@@ -130,6 +156,14 @@ export default function CameraGrid() {
             </div>
             
             <div className="flex items-center space-x-4">
+              {/* Botão de Descoberta */}
+              <Link
+                href="/discover"
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
+              >
+                🔍 Descobrir Câmeras
+              </Link>
+              
               {/* Controles de grade */}
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-gray-600">Tamanho:</span>
