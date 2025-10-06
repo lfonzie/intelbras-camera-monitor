@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import Hls from 'hls.js';
 
@@ -19,76 +19,7 @@ export default function CameraModal({ isOpen, onClose, cameraId, cameraName }: C
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
 
-  useEffect(() => {
-    if (isOpen && cameraId) {
-      loadCameraStream();
-    }
-    
-    return () => {
-      // Limpar HLS quando o modal fechar
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-        hlsRef.current = null;
-      }
-    };
-  }, [isOpen, cameraId]);
-  
-  // Configurar HLS quando a URL do stream mudar
-  useEffect(() => {
-    if (streamUrl && videoRef.current) {
-      if (Hls.isSupported()) {
-        // Limpar instância anterior se existir
-        if (hlsRef.current) {
-          hlsRef.current.destroy();
-        }
-        
-        const hls = new Hls({
-          enableWorker: true,
-          lowLatencyMode: true,
-          backBufferLength: 90
-        });
-        
-        hls.loadSource(streamUrl);
-        hls.attachMedia(videoRef.current);
-        
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          console.log('HLS manifest carregado com sucesso');
-          videoRef.current?.play().catch(e => console.error('Erro ao iniciar reprodução:', e));
-        });
-        
-        hls.on(Hls.Events.ERROR, (event, data) => {
-          console.error('Erro HLS:', data);
-          if (data.fatal) {
-            switch(data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                console.error('Erro de rede fatal, tentando recuperar...');
-                hls.startLoad();
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                console.error('Erro de mídia fatal, tentando recuperar...');
-                hls.recoverMediaError();
-                break;
-              default:
-                console.error('Erro fatal irrecuperável');
-                setError('Erro ao reproduzir o stream - verifique se a câmera está online');
-                hls.destroy();
-                break;
-            }
-          }
-        });
-        
-        hlsRef.current = hls;
-      } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
-        // Suporte nativo HLS (Safari)
-        videoRef.current.src = streamUrl;
-        videoRef.current.play().catch(e => console.error('Erro ao iniciar reprodução:', e));
-      } else {
-        setError('Seu navegador não suporta reprodução HLS');
-      }
-    }
-  }, [streamUrl]);
-
-  const loadCameraStream = async () => {
+  const loadCameraStream = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
@@ -96,29 +27,95 @@ export default function CameraModal({ isOpen, onClose, cameraId, cameraName }: C
       const response = await axios.get(`/api/streams/${cameraId}`, {
         timeout: 10000,
         headers: { 'Cache-Control': 'no-cache' },
-        validateStatus: (status) => status === 200 || status === 503 // Aceitar 503 como resposta válida
+        validateStatus: (status) => status === 200 || status === 503,
       });
 
       if (response.status === 200 && response.data.url) {
         setStreamUrl(response.data.url);
       } else {
-        // Câmera offline (status 503 ou sem URL)
-        setError('Câmera offline ou não acessível');
-        setStreamUrl(''); // Limpar URL para evitar tentativas de reprodução
+        if (response.status === 503 && response.data?.message) {
+          setError(response.data.message);
+        } else {
+          setError('Câmera offline ou não acessível');
+        }
+        setStreamUrl('');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(`Erro ao carregar stream da câmera ${cameraId}:`, error);
-      
-      if (error.response?.status === 404) {
+
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
         setError('Câmera não encontrada na configuração');
+      } else if (axios.isAxiosError(error) && error.response?.data?.error) {
+        setError(error.response.data.error);
       } else {
         setError('Erro ao conectar com a câmera');
       }
-      setStreamUrl(''); // Limpar URL em caso de erro
+      setStreamUrl('');
     } finally {
       setLoading(false);
     }
-  };
+  }, [cameraId]);
+
+  useEffect(() => {
+    if (isOpen && cameraId) {
+      loadCameraStream();
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [isOpen, cameraId, loadCameraStream]);
+
+  useEffect(() => {
+    if (!streamUrl || !videoRef.current) {
+      return;
+    }
+
+    if (Hls.isSupported()) {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+      }
+
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: true,
+        backBufferLength: 90,
+      });
+
+      hls.loadSource(streamUrl);
+      hls.attachMedia(videoRef.current);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        videoRef.current?.play().catch((e) => console.error('Erro ao iniciar reprodução:', e));
+      });
+
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              hls.recoverMediaError();
+              break;
+            default:
+              setError('Erro ao reproduzir o stream - verifique se a câmera está online');
+              hls.destroy();
+          }
+        }
+      });
+
+      hlsRef.current = hls;
+    } else if (videoRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+      videoRef.current.src = streamUrl;
+      videoRef.current.play().catch((e) => console.error('Erro ao iniciar reprodução:', e));
+    } else {
+      setError('Seu navegador não suporta reprodução HLS');
+    }
+  }, [streamUrl]);
 
   const handleClose = () => {
     setStreamUrl('');
@@ -128,7 +125,7 @@ export default function CameraModal({ isOpen, onClose, cameraId, cameraName }: C
   };
 
   const toggleFullscreen = () => {
-    setIsFullscreen(!isFullscreen);
+    setIsFullscreen((prev) => !prev);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -157,7 +154,6 @@ export default function CameraModal({ isOpen, onClose, cameraId, cameraName }: C
             : 'w-full max-w-6xl max-h-[90vh]'
         }`}
       >
-        {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50">
           <div className="flex items-center space-x-3">
             <h2 className="text-lg font-semibold text-gray-900">
@@ -165,7 +161,7 @@ export default function CameraModal({ isOpen, onClose, cameraId, cameraName }: C
             </h2>
             <span className="text-sm text-gray-500">ID: {cameraId}</span>
           </div>
-          
+
           <div className="flex items-center space-x-2">
             <button
               onClick={toggleFullscreen}
@@ -184,7 +180,6 @@ export default function CameraModal({ isOpen, onClose, cameraId, cameraName }: C
           </div>
         </div>
 
-        {/* Content */}
         <div className={`${isFullscreen ? 'h-[calc(100vh-60px)]' : 'h-96'} relative`}>
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
@@ -220,14 +215,12 @@ export default function CameraModal({ isOpen, onClose, cameraId, cameraName }: C
                 muted
                 playsInline
               />
-              
-              {/* Overlay com informações */}
+
               <div className="absolute top-4 left-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded text-sm">
                 <div>Stream: {streamUrl.split('/').pop()}</div>
                 <div>Status: Online</div>
               </div>
 
-              {/* Controles flutuantes */}
               <div className="absolute bottom-4 right-4 flex space-x-2">
                 <button
                   onClick={loadCameraStream}
@@ -237,7 +230,10 @@ export default function CameraModal({ isOpen, onClose, cameraId, cameraName }: C
                   🔄
                 </button>
                 <button
-                  onClick={() => window.open(`http://localhost:8000/camera/${cameraId}`, '_blank')}
+                  onClick={() => {
+                    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+                    window.open(`${origin}/camera/${cameraId}`, '_blank', 'noopener,noreferrer');
+                  }}
                   className="px-3 py-2 bg-black bg-opacity-50 text-white rounded hover:bg-opacity-70 transition-colors"
                   title="Abrir em nova aba"
                 >
@@ -248,7 +244,6 @@ export default function CameraModal({ isOpen, onClose, cameraId, cameraName }: C
           )}
         </div>
 
-        {/* Footer */}
         <div className="p-4 border-t border-gray-200 bg-gray-50">
           <div className="flex items-center justify-between text-sm text-gray-600">
             <div>
@@ -257,7 +252,7 @@ export default function CameraModal({ isOpen, onClose, cameraId, cameraName }: C
             </div>
             <div>
               <a
-                href={`http://localhost:8000/camera/${cameraId}`}
+                href={`/camera/${cameraId}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-600 hover:text-blue-800 underline"

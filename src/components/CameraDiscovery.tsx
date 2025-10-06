@@ -46,13 +46,19 @@ export default function CameraDiscovery() {
       clearInterval(progressInterval);
       setScanProgress(100);
 
-      if (response.data.success) {
+      if (response.status === 200 && response.data.success) {
         setDiscoveredCameras(response.data.cameras);
       } else {
-        setError('Erro na descoberta de câmeras');
+        const fallback = 'Descoberta automática indisponível. Execute o script discover_cameras.py manualmente.';
+        const message = (response.data as Partial<DiscoveryResponse> & { message?: string }).message ?? fallback;
+        setError(message);
       }
-    } catch (error) {
-      setError('Erro ao conectar com o servidor de descoberta');
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.data?.message) {
+        setError(error.response.data.message);
+      } else {
+        setError('Erro ao conectar com o servidor de descoberta');
+      }
       console.error('Erro na descoberta:', error);
     } finally {
       setIsScanning(false);
@@ -226,7 +232,7 @@ export default function CameraDiscovery() {
             <li>1. Conecte-se à rede onde estão as câmeras</li>
             <li>2. Configure a faixa de IPs correta (ex: 172.16.0.2-172.16.15.254)</li>
             <li>3. Para câmeras Intelbras Mibo Cam: use a chave de acesso como senha</li>
-            <li>4. Clique em "Iniciar Descoberta"</li>
+            <li>4. Clique em &quot;Iniciar Descoberta&quot;</li>
             <li>5. Copie a configuração gerada para o arquivo .env.local</li>
             <li>6. Reinicie o servidor para aplicar as mudanças</li>
           </ol>
@@ -240,10 +246,10 @@ export default function CameraDiscovery() {
             <ol className="ml-4 space-y-1">
               <li>1. Abra o app Mibo Cam</li>
               <li>2. Acesse as configurações da câmera (ícone engrenagem)</li>
-              <li>3. Clique em "Avançado" → "Redes"</li>
+              <li>3. Clique em &quot;Avançado&quot; → &quot;Redes&quot;</li>
               <li>4. Anote o IP da câmera</li>
               <li>5. Volte nas configurações e clique no nome da câmera</li>
-              <li>6. Acesse "Etiqueta do dispositivo" e anote a chave de acesso</li>
+              <li>6. Acesse &quot;Etiqueta do dispositivo&quot; e anote a chave de acesso</li>
             </ol>
             <p className="mt-2"><strong>Formato RTSP:</strong> <code>rtsp://admin:CHAVE_ACESSO@IP:554/cam/realmonitor?channel=1&subtype=0</code></p>
           </div>
@@ -262,7 +268,7 @@ export default function CameraDiscovery() {
             <ol className="ml-4 space-y-1">
               <li>1. Abra o app Tapo</li>
               <li>2. Acesse as configurações da câmera</li>
-              <li>3. Vá em "Configurações" → "Rede" → "Status da Rede"</li>
+              <li>3. Vá em &quot;Configurações&quot; → &quot;Rede&quot; → &quot;Status da Rede&quot;</li>
               <li>4. Anote o endereço IP da câmera</li>
             </ol>
             <p className="mt-2"><strong>Formatos RTSP disponíveis:</strong></p>

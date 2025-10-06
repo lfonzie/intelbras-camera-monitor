@@ -1,5 +1,12 @@
-import { createLogger, format, transports } from 'winston';
+import fs from 'fs';
 import path from 'path';
+import { createLogger, format, transports } from 'winston';
+
+const logsDirectory = path.join(process.cwd(), 'logs');
+
+if (!fs.existsSync(logsDirectory)) {
+  fs.mkdirSync(logsDirectory, { recursive: true });
+}
 
 // Configuração do logger principal
 const logger = createLogger({
@@ -14,14 +21,14 @@ const logger = createLogger({
   defaultMeta: { service: 'camera-monitor' },
   transports: [
     // Arquivo de log geral
-    new transports.File({ 
-      filename: path.join('logs', 'app.log'),
+    new transports.File({
+      filename: path.join(logsDirectory, 'app.log'),
       maxsize: 5242880, // 5MB
       maxFiles: 5,
     }),
     // Arquivo de log de erros
-    new transports.File({ 
-      filename: path.join('logs', 'error.log'),
+    new transports.File({
+      filename: path.join(logsDirectory, 'error.log'),
       level: 'error',
       maxsize: 5242880, // 5MB
       maxFiles: 5,
@@ -47,8 +54,8 @@ export const streamLogger = createLogger({
     format.json()
   ),
   transports: [
-    new transports.File({ 
-      filename: path.join('logs', 'streams.log'),
+    new transports.File({
+      filename: path.join(logsDirectory, 'streams.log'),
       maxsize: 5242880, // 5MB
       maxFiles: 5,
     }),
@@ -70,8 +77,8 @@ export const authLogger = createLogger({
     format.json()
   ),
   transports: [
-    new transports.File({ 
-      filename: path.join('logs', 'auth.log'),
+    new transports.File({
+      filename: path.join(logsDirectory, 'auth.log'),
       maxsize: 5242880, // 5MB
       maxFiles: 5,
     }),
@@ -93,8 +100,8 @@ export const recordingLogger = createLogger({
     format.json()
   ),
   transports: [
-    new transports.File({ 
-      filename: path.join('logs', 'recording.log'),
+    new transports.File({
+      filename: path.join(logsDirectory, 'recording.log'),
       maxsize: 5242880, // 5MB
       maxFiles: 5,
     }),

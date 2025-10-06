@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSession, SessionProvider } from 'next-auth/react';
-import { redirect } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 
 function ConfigPageContent() {
   const { data: session, status } = useSession();
+  const router = useRouter();
   const [cameras, setCameras] = useState('');
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('admin');
@@ -15,12 +16,18 @@ function ConfigPageContent() {
   const [cameraType, setCameraType] = useState<'intelbras' | 'tapo'>('intelbras');
   const [streamType, setStreamType] = useState<'stream1' | 'stream2'>('stream1');
 
-  if (status === 'loading') {
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/auth/signin');
+    }
+  }, [status, router]);
+
+  if (status === 'loading' || status === 'unauthenticated') {
     return <div className="flex justify-center items-center min-h-screen">Carregando...</div>;
   }
 
   if (!session) {
-    redirect('/auth/signin');
+    return null;
   }
 
   const handleSave = () => {
@@ -38,11 +45,18 @@ PASSWORD=${password}`;
     }
 
     // Copy to clipboard
-    navigator.clipboard.writeText(config).then(() => {
-      setMessage('Configuração copiada para a área de transferência! Cole no arquivo .env na raiz do projeto.');
-    }).catch(() => {
-      setMessage('Erro ao copiar para a área de transferência.');
-    });
+    if (!navigator.clipboard) {
+      setMessage('Recurso de área de transferência não disponível neste navegador. Copie manualmente.');
+      return;
+    }
+
+    navigator.clipboard.writeText(config)
+      .then(() => {
+        setMessage('Configuração copiada para a área de transferência! Cole no arquivo .env na raiz do projeto.');
+      })
+      .catch(() => {
+        setMessage('Erro ao copiar para a área de transferência.');
+      });
   };
 
   const handleTest = async () => {
@@ -81,7 +95,7 @@ PASSWORD=${password}`;
       } else {
         setTestResult(`❌ Erro: ${result.error}`);
       }
-    } catch (error) {
+    } catch {
       setTestResult('❌ Erro ao testar conexão com a câmera.');
     } finally {
       setIsTesting(false);
@@ -230,7 +244,7 @@ PASSWORD=${password}`;
               <li>Selecione o tipo de câmera (Intelbras ou TP-Link Tapo)</li>
               <li>Para câmeras Tapo, escolha o tipo de stream (1080P ou 360P)</li>
               <li>Preencha os dados das suas câmeras acima</li>
-              <li>Clique em "Gerar Configuração"</li>
+              <li>Clique em &quot;Gerar Configuração&quot;</li>
               <li>Cole o conteúdo copiado em um arquivo chamado <code>.env</code> na raiz do projeto</li>
               <li>Reinicie o servidor para aplicar as configurações</li>
             </ol>
