@@ -1,215 +1,244 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import Link from 'next/link';
-import Camera from '@/components/Camera';
 import axios from 'axios';
+
+import Camera from '@/components/Camera';
+
+interface CameraMetadata {
+  id: number;
+  name: string;
+  type: string;
+}
+
+interface CamerasApiResponse {
+  cameras: CameraMetadata[];
+}
+
+type GridSize = 'small' | 'medium' | 'large';
+
+type CameraStatus = 'idle' | 'loading' | 'online' | 'offline' | 'error';
 
 export default function CameraGrid() {
   const { data: session, status } = useSession();
+  const [cameraMetadata, setCameraMetadata] = useState<CameraMetadata[]>([]);
   const [streams, setStreams] = useState<Record<number, string>>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>('');
-  const [, setRecordingCameras] = useState<Set<number>>(new Set());
-  const [gridSize, setGridSize] = useState<'small' | 'medium' | 'large'>('medium');
-  const [availableCameras, setAvailableCameras] = useState<number[]>([]);
+  const [loadingCameras, setLoadingCameras] = useState(true);
+  const [streamError, setStreamError] = useState<string>('');
+  const [cameraStatuses, setCameraStatuses] = useState<Record<number, CameraStatus>>({});
+  const [gridSize, setGridSize] = useState<GridSize>('medium');
   const [currentPage, setCurrentPage] = useState(1);
-  const camerasPerPage = 4;
-  const [visibleCameras, setVisibleCameras] = useState<Set<number>>(new Set());
-  const [loadedStreams, setLoadedStreams] = useState<Set<number>>(new Set());
+  const [isFetchingStreams, setIsFetchingStreams] = useState(false);
+  const loadedStreams = useRef<Set<number>>(new Set());
 
-  // Get available cameras from environment or use default
-  const getAvailableCameras = async () => {
-    try {
-      // Try to get camera count from a simple API endpoint
-      const response = await axios.get('/api/cameras/count');
-      const count = response.data.count || 0;
-      return Array.from({ length: count }, (_, i) => i + 1);
-    } catch (error) {
-      console.warn('Could not get camera count, using default of 5 cameras');
-      // Default to 5 cameras if no configuration is found
-      return Array.from({ length: 5 }, (_, i) => i + 1);
-    }
-  };
-
-  const cameras = availableCameras;
-  
-  // Calcular câmeras da página atual
-  const totalPages = Math.ceil(cameras.length / camerasPerPage);
-  const startIndex = (currentPage - 1) * camerasPerPage;
-  const endIndex = startIndex + camerasPerPage;
-  const currentPageCameras = cameras.slice(startIndex, endIndex);
-
-  // Load available cameras first
   useEffect(() => {
+    let cancelled = false;
     const loadCameras = async () => {
-      const cameras = await getAvailableCameras();
-      setAvailableCameras(cameras);
-    };
-    loadCameras();
-  }, []);
-
-  // Carregar streams das câmeras
-  useEffect(() => {
-    if (status === 'loading' || availableCameras.length === 0) return;
-    
-    if (!session) {
-      setLoading(false);
-      return;
-    }
-
-    const fetchStreams = async () => {
       try {
-        setLoading(true);
-        setError('');
-        
-        // Carregar apenas a primeira câmera da página para evitar sobrecarga
-        const camerasToLoad = currentPageCameras.slice(0, 1).filter(id => !loadedStreams.has(id));
-        
-        if (camerasToLoad.length === 0) {
-          console.log('Nenhuma câmera nova para carregar');
-          setLoading(false);
-          return;
-        }
+        setLoadingCameras(true);
+        const response = await axios.get<CamerasApiResponse>('/api/cameras', {
+          headers: { 'Cache-Control': 'no-cache' },
+        });
+        if (cancelled) return;
 
-        const batchSize = 1; // Carregar uma câmera por vez para evitar sobrecarga
-        const streamMap: Record<number, string> = {};
-        const offlineCameras: number[] = [];
-        
-        for (let i = 0; i < camerasToLoad.length; i += batchSize) {
-          const batch = camerasToLoad.slice(i, i + batchSize);
-          
-          const promises = batch.map(async (id) => {
-            try {
-              const response = await axios.get(`/api/streams/${id}`, {
-                timeout: 10000, // Aumentado para 10 segundos
-                headers: {
-                  'Cache-Control': 'no-cache'
-                },
-                validateStatus: (status) => status === 200 || status === 503 // Aceitar 503 como resposta válida
-              });
-              
-              if (response.data.url) {
-                console.log(`Stream obtido para câmera ${id}: ${response.data.url}`);
-                return { id, url: response.data.url, status: 'online' };
-              } else {
-                console.warn(`Câmera ${id} não retornou URL de stream`);
-                return { id, url: '', status: 'offline' };
-              }
-            } catch (error: any) {
-              console.warn(`Câmera ${id} indisponível:`, error.response?.status, error.message);
-              
-              // Se for erro 503 (câmera não acessível), marcar como offline
-              if (error.response?.status === 503) {
-                const errorData = error.response?.data;
-                console.warn(`Câmera ${id} offline: ${errorData?.ip}:${errorData?.port} - ${errorData?.error || 'Câmera não acessível'}`);
-                if (errorData?.details) {
-                  console.warn(`Detalhes: ${errorData.details}`);
-                }
-                offlineCameras.push(id);
-                return { id, url: '', status: 'offline' };
-              }
-              
-              // Se for erro 500 (erro interno), também marcar como offline
-              if (error.response?.status === 500) {
-                console.error(`Erro interno na câmera ${id}:`, error.response?.data?.error || 'Erro desconhecido');
-                offlineCameras.push(id);
-                return { id, url: '', status: 'offline' };
-              }
-              
-              // Se for erro 404 (câmera não encontrada)
-              if (error.response?.status === 404) {
-                console.warn(`Câmera ${id} não encontrada na configuração`);
-                return { id, url: '', status: 'not_found' };
-              }
-              
-              return { id, url: '', status: 'error' };
+        const metadata = response.data?.cameras ?? [];
+
+        setCameraMetadata(metadata);
+        setCameraStatuses((prev) => {
+          const next: Record<number, CameraStatus> = { ...prev };
+          metadata.forEach((camera) => {
+            if (!next[camera.id]) {
+              next[camera.id] = 'idle';
             }
           });
-
-          const results = await Promise.all(promises);
-          results.forEach(({ id, url }) => {
-            streamMap[id] = url;
-          });
-          
-          // Pausa entre lotes para evitar sobrecarga
-          if (i + batchSize < camerasToLoad.length) {
-            await new Promise(resolve => setTimeout(resolve, 2000)); // Aumentado para 2 segundos
-          }
-        }
-
-        const activeStreams = Object.values(streamMap).filter(url => url).length;
-        console.log(`Streams carregados: ${activeStreams} de ${camerasToLoad.length} câmeras (página ${currentPage})`);
-        console.log(`Câmeras offline: ${offlineCameras.length}`);
-        
-        setStreams(prev => ({ ...prev, ...streamMap }));
-        
-        // Marcar câmeras como carregadas
-        setLoadedStreams(prev => {
-          const newSet = new Set(prev);
-          camerasToLoad.forEach(id => newSet.add(id));
-          return newSet;
+          return next;
         });
-        
-        // Mostrar aviso se muitas câmeras estão offline
-        if (offlineCameras.length > camerasToLoad.length * 0.5) {
-          setError(`Muitas câmeras estão offline (${offlineCameras.length}/${camerasToLoad.length}). Verifique a conectividade e credenciais. Possíveis causas: credenciais incorretas, RTSP desabilitado, ou formato de URL incorreto.`);
-        } else if (offlineCameras.length > 0) {
-          setError(`Algumas câmeras estão offline (${offlineCameras.length}/${camerasToLoad.length}). Câmeras offline: ${offlineCameras.join(', ')}. Verifique credenciais e configurações RTSP.`);
+      } catch {
+        if (!cancelled) {
+          setStreamError('Não foi possível carregar a configuração das câmeras. Verifique o arquivo .env.');
         }
-      } catch (error) {
-        console.error('Erro ao carregar streams:', error);
-        setError('Erro ao carregar streams das câmeras');
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoadingCameras(false);
+        }
       }
     };
 
-    fetchStreams();
-  }, [session, status, availableCameras, currentPage, loadedStreams]);
+    loadCameras();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  const handleRecord = (cameraId: number) => {
-    setRecordingCameras(prev => new Set(prev).add(cameraId));
-    // Simular parada da gravação após 5 segundos
-    setTimeout(() => {
-      setRecordingCameras(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(cameraId);
-        return newSet;
+  const camerasPerPage = useMemo(() => {
+    switch (gridSize) {
+      case 'small':
+        return 9;
+      case 'large':
+        return 1;
+      default:
+        return 4;
+    }
+  }, [gridSize]);
+
+  const totalPages = useMemo(() => {
+    if (cameraMetadata.length === 0) return 1;
+    return Math.ceil(cameraMetadata.length / camerasPerPage);
+  }, [cameraMetadata.length, camerasPerPage]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const currentPageCameras = useMemo(() => {
+    const startIndex = (currentPage - 1) * camerasPerPage;
+    return cameraMetadata.slice(startIndex, startIndex + camerasPerPage);
+  }, [cameraMetadata, currentPage, camerasPerPage]);
+
+  const updateStatus = useCallback((cameraId: number, status: CameraStatus) => {
+    setCameraStatuses((prev) => ({
+      ...prev,
+      [cameraId]: status,
+    }));
+  }, []);
+
+  const handleRecordStart = useCallback((cameraId: number) => {
+    console.info(`Gravação iniciada para câmera ${cameraId}`);
+  }, []);
+
+  const fetchStreamForCamera = useCallback(async (cameraId: number) => {
+    updateStatus(cameraId, 'loading');
+    try {
+      const response = await axios.get(`/api/streams/${cameraId}`, {
+        timeout: 15000,
+        headers: { 'Cache-Control': 'no-cache' },
       });
-    }, 5000);
-  };
 
-  const handleCameraError = (cameraId: number, error: string) => {
-    console.error(`Erro na câmera ${cameraId}:`, error);
-  };
+      if (response.data?.url) {
+        setStreams((prev) => ({ ...prev, [cameraId]: response.data.url }));
+        loadedStreams.current.add(cameraId);
+        updateStatus(cameraId, 'online');
+        return true;
+      }
 
-  const getGridClasses = () => {
-    // Para 4 câmeras por página, usar grid 2x2
-    return 'grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-2';
-  };
+      updateStatus(cameraId, 'offline');
+      return false;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.status === 429) {
+        setStreamError(error.response.data?.error || 'Limite de streams simultâneos atingido.');
+      }
+      updateStatus(cameraId, 'offline');
+      return false;
+    }
+  }, [updateStatus]);
+
+  useEffect(() => {
+    const abortController = new AbortController();
+
+    if (status !== 'authenticated' || currentPageCameras.length === 0) {
+      return () => abortController.abort();
+    }
+
+    const loadStreamsForPage = async () => {
+      setIsFetchingStreams(true);
+      setStreamError('');
+
+      const pendingIds = currentPageCameras
+        .map((camera) => camera.id)
+        .filter((id) => !loadedStreams.current.has(id));
+
+      if (pendingIds.length === 0) {
+        setIsFetchingStreams(false);
+        return;
+      }
+
+      const offlineIds: number[] = [];
+
+      for (const id of pendingIds) {
+        if (abortController.signal.aborted) {
+          break;
+        }
+
+        const success = await fetchStreamForCamera(id);
+        if (!success) {
+          offlineIds.push(id);
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+
+      if (offlineIds.length > 0) {
+        setStreamError(`Algumas câmeras estão offline: ${offlineIds.join(', ')}`);
+      }
+
+      setIsFetchingStreams(false);
+    };
+
+    loadStreamsForPage();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [status, currentPageCameras, fetchStreamForCamera]);
+
+  useEffect(() => {
+    const currentIds = new Set(currentPageCameras.map((camera) => camera.id));
+    const toStop = Array.from(loadedStreams.current).filter((id) => !currentIds.has(id));
+
+    if (toStop.length === 0) {
+      return;
+    }
+
+    toStop.forEach((id) => {
+      axios.delete(`/api/streams/${id}`).catch(() => undefined);
+      loadedStreams.current.delete(id);
+      setStreams((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      updateStatus(id, 'idle');
+    });
+  }, [currentPageCameras, updateStatus]);
+
+  useEffect(() => {
+    const streamSet = loadedStreams.current;
+    return () => {
+      const ids = Array.from(streamSet);
+      ids.forEach((id) => {
+        axios.delete(`/api/streams/${id}`).catch(() => undefined);
+      });
+      streamSet.clear();
+    };
+  }, []);
 
   const goToPage = (page: number) => {
     if (page >= 1 && page <= totalPages) {
       setCurrentPage(page);
-      setStreams({}); // Limpar streams ao mudar de página
-      setLoadedStreams(new Set()); // Limpar cache de streams carregados
     }
   };
 
-  // Função de visibilidade desabilitada temporariamente
-  const handleVisibilityChange = (cameraId: number, visible: boolean) => {
-    // Desabilitado para evitar loops
-    return;
+  const getGridClasses = () => {
+    switch (gridSize) {
+      case 'small':
+        return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3';
+      case 'large':
+        return 'grid-cols-1';
+      default:
+        return 'grid-cols-1 sm:grid-cols-2';
+    }
   };
 
-  if (status === 'loading') {
+  if (status === 'loading' || loadingCameras) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-          <p className="text-gray-600">Carregando...</p>
+          <p className="text-gray-600">Carregando configuração...</p>
         </div>
       </div>
     );
@@ -234,7 +263,6 @@ export default function CameraGrid() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-4">
@@ -246,30 +274,27 @@ export default function CameraGrid() {
                 Bem-vindo, {session.user?.name}
               </p>
             </div>
-            
+
             <div className="flex items-center space-x-4">
-              {/* Menu de Câmeras */}
               <Link
                 href="/cameras"
                 className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-medium"
               >
                 📹 Menu de Câmeras
               </Link>
-              
-              {/* Botão de Descoberta */}
+
               <Link
                 href="/discover"
                 className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
               >
                 🔍 Descobrir Câmeras
               </Link>
-              
-              {/* Controles de grade */}
+
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-gray-600">Tamanho:</span>
                 <select
                   value={gridSize}
-                  onChange={(e) => setGridSize(e.target.value as 'small' | 'medium' | 'large')}
+                  onChange={(e) => setGridSize(e.target.value as GridSize)}
                   className="text-sm border border-gray-300 rounded px-2 py-1"
                 >
                   <option value="small">Pequeno</option>
@@ -277,21 +302,18 @@ export default function CameraGrid() {
                   <option value="large">Grande</option>
                 </select>
               </div>
-              
-              {/* Status */}
+
               <div className="text-sm text-gray-600">
-                Página {currentPage} de {totalPages} - {Object.values(streams).filter(url => url).length} de {currentPageCameras.length} câmeras
+                Página {currentPage} de {totalPages} - {Object.values(streams).filter(Boolean).length} de {currentPageCameras.length} câmeras ativas
               </div>
-              
-              {/* Config Link */}
+
               <Link
                 href="/config"
                 className="px-4 py-2 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
               >
                 Configuração
               </Link>
-              
-              {/* Logout */}
+
               <button
                 onClick={() => signOut()}
                 className="px-4 py-2 text-sm bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
@@ -303,44 +325,49 @@ export default function CameraGrid() {
         </div>
       </header>
 
-      {/* Conteúdo principal */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {loading && (
-          <div className="text-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-4"></div>
-            <p className="text-gray-600">Carregando streams das câmeras...</p>
+        {(isFetchingStreams || status === 'loading') && (
+          <div className="text-center py-4">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500 mx-auto mb-2"></div>
+            <p className="text-sm text-gray-600">Carregando streams das câmeras...</p>
           </div>
         )}
 
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+        {streamError && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
             <div className="flex">
-              <div className="text-red-400">⚠️</div>
+              <div className="text-yellow-500">⚠️</div>
               <div className="ml-3">
-                <h3 className="text-sm font-medium text-red-800">Erro</h3>
-                <p className="text-sm text-red-700 mt-1">{error}</p>
+                <h3 className="text-sm font-medium text-yellow-800">Aviso</h3>
+                <p className="text-sm text-yellow-700 mt-1">{streamError}</p>
               </div>
             </div>
           </div>
         )}
 
-        {!loading && (
+        {cameraMetadata.length === 0 ? (
+          <div className="bg-white rounded-lg shadow-md p-6 text-center">
+            <div className="text-4xl mb-2">📷</div>
+            <p className="text-gray-700">Nenhuma câmera configurada.</p>
+            <p className="text-sm text-gray-500 mt-1">Utilize a página de configuração para adicionar câmeras.</p>
+          </div>
+        ) : (
           <>
             <div className={`grid ${getGridClasses()} gap-4`}>
-              {currentPageCameras.map((id) => (
+              {currentPageCameras.map((camera) => (
                 <Camera
-                  key={id}
-                  id={id}
-                  streamUrl={streams[id]}
-                  onRecord={handleRecord}
-                  onError={handleCameraError}
-                  isVisible={true}
-                  onVisibilityChange={handleVisibilityChange}
+                  key={camera.id}
+                  id={camera.id}
+                  name={camera.name}
+                  streamUrl={streams[camera.id]}
+                  onRecord={handleRecordStart}
+                  onError={() => updateStatus(camera.id, 'error')}
+                  isVisible
+                  statusOverride={cameraStatuses[camera.id]}
                 />
               ))}
             </div>
 
-            {/* Controles de paginação */}
             {totalPages > 1 && (
               <div className="mt-8 flex justify-center items-center space-x-4">
                 <button
@@ -354,7 +381,7 @@ export default function CameraGrid() {
                 >
                   ← Anterior
                 </button>
-                
+
                 <div className="flex space-x-2">
                   {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
                     <button
@@ -370,7 +397,7 @@ export default function CameraGrid() {
                     </button>
                   ))}
                 </div>
-                
+
                 <button
                   onClick={() => goToPage(currentPage + 1)}
                   disabled={currentPage === totalPages}

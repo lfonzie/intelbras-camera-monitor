@@ -80,8 +80,8 @@ jspm_packages/
 .vscode-test
 
 # FFmpeg temporary files
-*.ts
-*.m3u8
+public/streams/*.ts
+public/streams/*.m3u8
 
 # Recordings
 public/recordings/
