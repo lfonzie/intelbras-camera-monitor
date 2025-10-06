@@ -1,0 +1,43 @@
+{
+  "name": "intelbras-camera-monitor-v2",
+  "version": "2.0.0",
+  "description": "RTSP to HLS Streaming Server for Intelbras and Tapo IP Cameras",
+  "main": "server_enhanced.js",
+  "scripts": {
+    "start": "node server_enhanced.js",
+    "dev": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "rtsp",
+    "hls",
+    "streaming",
+    "ip-camera",
+    "intelbras",
+    "tapo",
+    "ffmpeg"
+  ],
+  "author": "Camera Monitor Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "winston": "^3.10.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/intelbras-camera-monitor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/intelbras-camera-monitor/issues"
+  },
+  "homepage": "https://github.com/your-username/intelbras-camera-monitor#readme"
+}
+
+
+
+
